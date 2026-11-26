@@ -21,3 +21,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_singleapp_large.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x9000
 CONFIG_PARTITION_TABLE_MD5=y
+# BLE 4.2 GAP API (scan params, security params) is gated behind this from IDF 5.3.2 on;
+# the old sdkconfig had it unset, which is why 5.3.3+ failed to link (upstream issue #22).
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
