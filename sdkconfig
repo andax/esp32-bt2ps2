@@ -432,6 +432,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# BT2PS2 bridge
+#
+# CONFIG_BT2PS2_MOUSE_TRACE is not set
+# end of BT2PS2 bridge
+
+#
 # Compiler options
 #
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y

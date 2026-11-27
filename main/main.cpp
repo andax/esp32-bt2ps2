@@ -644,6 +644,12 @@ void mouse_task(void *arg)
             else
             {
                 mouse.move(infoMouse.mouse_x, infoMouse.mouse_y, infoMouse.mouse_w);
+#if CONFIG_BT2PS2_MOUSE_TRACE
+                ESP_LOGI(TAG, "MT dx=%4d dy=%4d w=%2d b=%u lat_us=%6lld q=%u",
+                         infoMouse.mouse_x, infoMouse.mouse_y, infoMouse.mouse_w, infoMouse.mouse_buttons,
+                         (long long)(esp_timer_get_time() - infoMouse.t_rx_us),
+                         bt_keyboard.mouse_queue_depth());
+#endif
 
                 // KEY SECTION (always tested)
                 if ((infoMouse.mouse_buttons) != (infoMouseBuf.mouse_buttons))

@@ -1404,7 +1404,13 @@ void BTKeyboard::mouse_handle(uint8_t *report_data, std::pair<esp_hidh_dev_t *, 
   mouse.mouse_buttons = (uint8_t)getBits(report_data, mouse_reports[*key_pair].mouse_buttons_bit_index, mouse_reports[*key_pair].mouse_buttons_amount); // only a single byte for mouse buttons is supported (3 mouse buttons will be used later only)
 
   ESP_LOGD(TAG, "Mouse passed to MAIN: B: %u X: %d Y: %d W: %d", mouse.mouse_buttons, mouse.mouse_x, mouse.mouse_y, mouse.mouse_w);
-  xQueueSend(event_queue_MOUSE, &mouse, 0);
+  mouse.t_rx_us = esp_timer_get_time();
+  if (xQueueSend(event_queue_MOUSE, &mouse, 0) != pdTRUE)
+  {
+#if CONFIG_BT2PS2_MOUSE_TRACE
+    ESP_LOGW(TAG, "mouse queue full, report dropped");
+#endif
+  }
 }
 
 void BTKeyboard::push_key(uint8_t *keys, uint8_t size)

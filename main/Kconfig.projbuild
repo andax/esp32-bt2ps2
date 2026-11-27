@@ -1,0 +1,12 @@
+menu "BT2PS2 bridge"
+
+    config BT2PS2_MOUSE_TRACE
+        bool "Trace every mouse report on the console (latency BLE -> PS/2 done, queue depth)"
+        default n
+        help
+            Logs one line per mouse report at INFO level after the PS/2 packet has been
+            sent: dx, dy, wheel, buttons, latency from BLE receipt to PS/2 completion in
+            microseconds, and how many reports were still queued. Diagnostic only; it
+            costs ~60 bytes of UART per report.
+
+endmenu

@@ -29,6 +29,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_event.h"
 #include "esp_bt.h"
 #include "esp_bt_defs.h"
@@ -95,6 +96,7 @@ public:
     int8_t mouse_w = 0;
 
     uint8_t mouse_buttons = 0;
+    int64_t t_rx_us = 0; // esp_timer_get_time() when the BLE/BT report was parsed (for latency tracing)
   };
 
 private:
@@ -343,6 +345,8 @@ public:
   {
     return xQueueReceive(event_queue_CCONTROL, &inf, duration);
   }
+
+  inline unsigned mouse_queue_depth() { return (unsigned)uxQueueMessagesWaiting(event_queue_MOUSE); }
 
   inline bool wait_for_low_event_MOUSE(Mouse_Control &inf, TickType_t duration = portMAX_DELAY)
   {
