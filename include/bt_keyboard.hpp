@@ -307,6 +307,7 @@ private:
   char last_ch;
   TickType_t repeat_period;
   pid_handler *pairing_handler;
+  void (*pin_request_handler)(void); // called when a legacy-pairing PIN is requested (type 1234 now)
   bool caps_lock;
 
   static esp_err_t hid_report_parse_multimedia_keys(const uint8_t *hid_rm, size_t hid_rm_len, esp_hidh_dev_t *device);
@@ -321,11 +322,13 @@ public:
                  num_bt_scan_results(0),
                  num_ble_scan_results(0),
                  pairing_handler(nullptr),
+                 pin_request_handler(nullptr),
                  caps_lock(false)
   {
   }
 
   bool setup(pid_handler *handler = nullptr);
+  inline void set_pin_request_handler(void (*h)(void)) { pin_request_handler = h; }
   bool devices_scan(int seconds_wait_time = 5);
   bool devices_scan_ble_daemon(int seconds_wait_time = 5);
 
@@ -353,4 +356,6 @@ public:
 
   static bool isConnected; // hidh callback event CLOSE turns this false when kb disconnects
   static bool btFound;     // found a BT (not BLE) device during scan, let's wait for pairing
+  static bool openFailed;  // hidh OPEN event reported an error (page timeout, SDP, auth); lets the pairing loop retry at once
+  bool reopen_last();      // retry esp_hidh_dev_open() on the last device we tried, without a new inquiry
 };

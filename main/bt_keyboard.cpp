@@ -24,6 +24,7 @@
 #include "../include/bt_keyboard.hpp"
 
 #include <cstring>
+#include <cinttypes>
 #include <algorithm>
 #include <iterator>
 
@@ -61,6 +62,7 @@ const char BTKeyboard::shift_trans_dict[] =
 static BTKeyboard *bt_keyboard = nullptr;
 bool BTKeyboard::isConnected = false;
 bool BTKeyboard::btFound = false;
+bool BTKeyboard::openFailed = false;
 BTKeyboard::esp_hid_scan_result_t BTKeyboard::lastConnected;
 
 std::map<std::pair<esp_hidh_dev_t *, uint16_t>, BTKeyboard::hid_report_multimedia_control> BTKeyboard::multimedia_reports;
@@ -408,13 +410,17 @@ bool BTKeyboard::setup(pid_handler *handler)
    * Set default parameters for Legacy Pairing
    * Use fixed pin code
    */
-  esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
+  esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE; // VARIABLE: the stack raises ESP_BT_GAP_PIN_REQ_EVT and we answer 1234 there (and can signal the user)
   esp_bt_pin_code_t pin_code;
   pin_code[0] = '1';
   pin_code[1] = '2';
   pin_code[2] = '3';
   pin_code[3] = '4';
   esp_bt_gap_set_pin(pin_type, 4, pin_code);
+
+  // Some keyboards (e.g. Rapoo E6300) answer paging only sporadically while in pairing mode;
+  // the default page timeout (0x2000 slots = 5.12 s) then fails with HCI status 0x04. Allow ~15 s.
+  esp_bt_gap_set_page_timeout(0x6000);
 
   if ((ret = esp_bt_gap_register_callback(bt_gap_event_handler)))
   {
@@ -628,15 +634,46 @@ void BTKeyboard::bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb
     break;
   }
   case ESP_BT_GAP_KEY_NOTIF_EVT:
-    ESP_LOGV(TAG, "BT GAP KEY_NOTIF passkey:%d", param->key_notif.passkey);
+    ESP_LOGW(TAG, "SSP PASSKEY ENTRY: TYPE %06" PRIu32 " AND PRESS ENTER ON THE KEYBOARD", (uint32_t)param->key_notif.passkey);
     if (bt_keyboard->pairing_handler != nullptr)
       (*bt_keyboard->pairing_handler)(param->key_notif.passkey);
     break;
   case ESP_BT_GAP_MODE_CHG_EVT:
     ESP_LOGV(TAG, "BT GAP MODE_CHG_EVT mode:%d", param->mode_chg.mode);
     break;
+  case ESP_BT_GAP_PIN_REQ_EVT:
+  {
+    // Legacy pairing: the keyboard has no display, so the PIN is fixed to 1234 on our side
+    // and the user must type it on the keyboard right now. Signal that moment.
+    esp_bt_pin_code_t pin_code;
+    uint8_t pin_len = 4;
+    memcpy(pin_code, "1234", 4);
+    if (param->pin_req.min_16_digit)
+    {
+      memcpy(pin_code, "1234123412341234", 16);
+      pin_len = 16;
+    }
+    ESP_LOGW(TAG, "LEGACY PIN REQUESTED by %02x:%02x:%02x:%02x:%02x:%02x -> TYPE %.*s AND PRESS ENTER ON THE KEYBOARD NOW",
+             param->pin_req.bda[0], param->pin_req.bda[1], param->pin_req.bda[2],
+             param->pin_req.bda[3], param->pin_req.bda[4], param->pin_req.bda[5], pin_len, (const char *)pin_code);
+    esp_bt_gap_pin_reply(param->pin_req.bda, true, pin_len, pin_code);
+    if (bt_keyboard->pin_request_handler != nullptr)
+      (*bt_keyboard->pin_request_handler)();
+    break;
+  }
+  case ESP_BT_GAP_CFM_REQ_EVT:
+    // SSP numeric comparison: we have no display, accept.
+    ESP_LOGW(TAG, "SSP confirm request, passkey %06" PRIu32 " -> accepting", (uint32_t)param->cfm_req.num_val);
+    esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
+    break;
+  case ESP_BT_GAP_AUTH_CMPL_EVT:
+    if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS)
+      ESP_LOGI(TAG, "BT Classic authentication OK with '%s' (link key type %d)", (const char *)param->auth_cmpl.device_name, param->auth_cmpl.lk_type);
+    else
+      ESP_LOGE(TAG, "BT Classic authentication FAILED, status 0x%x ('%s')", param->auth_cmpl.stat, (const char *)param->auth_cmpl.device_name);
+    break;
   default:
-    ESP_LOGV(TAG, "BT GAP EVENT %s", bt_gap_evt_str(event));
+    ESP_LOGI(TAG, "BT GAP EVENT %s", bt_gap_evt_str(event));
     break;
   }
 }
@@ -935,6 +972,14 @@ BTKeyboard::esp_hid_scan(uint32_t seconds, size_t *num_results, esp_hid_scan_res
   return ESP_OK;
 }
 
+bool BTKeyboard::reopen_last()
+{
+  if (lastConnected.transport != ESP_HID_TRANSPORT_BT && lastConnected.transport != ESP_HID_TRANSPORT_BLE)
+    return false;
+  ESP_LOGW(TAG, "Retrying connection to " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(lastConnected.bda));
+  return esp_hidh_dev_open(lastConnected.bda, lastConnected.transport, lastConnected.ble.addr_type) != NULL;
+}
+
 bool BTKeyboard::devices_scan(int seconds_wait_time)
 {
   if (isConnected)
@@ -1072,7 +1117,7 @@ bool BTKeyboard::devices_scan(int seconds_wait_time)
       lastConnected = *cr; // store device for quick-connecting later
       if ((esp_hidh_dev_open(cr->bda, cr->transport, cr->ble.addr_type)) != NULL)
       {
-        ESP_LOGI(TAG, "Connected to device: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(cr->bda));
+        ESP_LOGI(TAG, "Connecting to device: " ESP_BD_ADDR_STR " (wait for OPEN result)", ESP_BD_ADDR_HEX(cr->bda));
         esp_hid_scan_results_free(results);
         free(dev_list);
         return true; // WARNING: devices_scan retourning true doesn't mean device connected!! check isConnected for that
@@ -1234,6 +1279,7 @@ void BTKeyboard::hidh_callback(void *handler_args, esp_event_base_t base, int32_
       {
         ESP_LOGE(TAG, " OPEN failed!");
         isConnected = false;
+        openFailed = true;
       }
       break;
     }

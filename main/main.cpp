@@ -117,6 +117,26 @@ void pairing_handler(uint32_t pid) // This handler deals with BT Classic's manua
     codeHandlerActive = false; // LED control returned to main loop
 }
 
+// Legacy-pairing PIN requested: flash the LED fast for 15 s so the user knows to type 1234 + ENTER now.
+static void pin_request_blink_task(void *arg)
+{
+    codeHandlerActive = true; // LED control taken from main loop
+    for (int i = 0; i < 75; i++)
+    {
+        gpio_set_level(GPIO_NUM_2, 1);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+        gpio_set_level(GPIO_NUM_2, 0);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    codeHandlerActive = false;
+    vTaskDelete(NULL);
+}
+
+void pin_request_handler(void) // runs in the Bluetooth stack's task: do not block here
+{
+    xTaskCreate(pin_request_blink_task, "pin_blink", 2048, NULL, 5, NULL);
+}
+
 static void IRAM_ATTR pairing_scan(void *arg = NULL)
 {
     BTKeyboard::isConnected = false;
@@ -138,11 +158,19 @@ static void IRAM_ATTR pairing_scan(void *arg = NULL)
         if (BTKeyboard::btFound)
         {
             BTKeyboard::btFound = false;
+            BTKeyboard::openFailed = false;
+            int retries = 0;
             for (int i = 0; i < 60; i++)
             {
                 if (BTKeyboard::isConnected)
                     break;
-                ESP_LOGI(TAG, "Waiting for BT Classic manual code entry...");
+                if (BTKeyboard::openFailed) // page timeout / SDP / auth failure: retry at once instead of idling
+                {
+                    BTKeyboard::openFailed = false;
+                    if (++retries > 3 || !bt_keyboard.reopen_last())
+                        break; // give up on this device, go back to scanning
+                }
+                ESP_LOGI(TAG, "Waiting for BT Classic connection/pairing... (%d s, retry %d)", i, retries);
                 vTaskDelay(1000 / portTICK_PERIOD_MS);
             }
         }
@@ -243,6 +271,7 @@ extern "C"
         }
         ESP_ERROR_CHECK(ret);
 
+        bt_keyboard.set_pin_request_handler(pin_request_handler);
         if (bt_keyboard.setup(pairing_handler)) // Must be called once
         {
             if (pairing_at_startup)
